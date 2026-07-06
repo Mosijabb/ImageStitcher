@@ -5,12 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>PicStitch</title>
   
-  <!-- PWA Meta Tags for iOS -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="PicStitch">
-  <link rel="apple-touch-icon" href="https://via.placeholder.com/192/000000/FFFFFF/?text=PS">
-  
+  <link rel="apple-touch-icon" href="icon.png">
   <link rel="manifest" href="manifest.json">
 
   <style>
@@ -53,7 +51,6 @@
       border-radius: 8px;
     }
     
-    /* Graphical Layout Selector Styles */
     .layout-selector {
       display: flex;
       gap: 10px;
@@ -81,7 +78,6 @@
       font-size: 12px;
       font-weight: 500;
     }
-    /* Mini-icons made with CSS */
     .icon-row { display: flex; gap: 3px; }
     .icon-col { display: flex; flex-direction: column; gap: 3px; }
     .icon-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
@@ -106,12 +102,12 @@
       margin-bottom: 20px;
       border-radius: 8px;
       overflow: hidden;
+      background: #ffffff;
     }
     canvas {
       width: 100%;
       height: auto;
       display: block;
-      background: #000;
     }
     #error-msg {
       color: #ff453a;
@@ -128,7 +124,6 @@
   <div class="card">
     <label for="imageInput">Select 2, 3, 4, 5, 6, 7, 8, or 10 pictures:</label>
     <input type="file" id="imageInput" multiple accept="image/*">
-
     <div id="error-msg"></div>
 
     <label>Layout Style:</label>
@@ -139,11 +134,11 @@
       </div>
       <div class="layout-option" data-layout="row">
         <div class="icon-row"><div class="box"></div><div class="box"></div><div class="box"></div></div>
-        <span>Side-by-Side</span>
+        <span>Row</span>
       </div>
       <div class="layout-option" data-layout="col">
         <div class="icon-col"><div class="box"></div><div class="box"></div><div class="box"></div></div>
-        <span>Stacked</span>
+        <span>Col</span>
       </div>
     </div>
 
@@ -157,10 +152,7 @@
   <button id="saveBtn" style="display: none; max-width: 400px; margin-bottom: 40px;">Save to Photos</button>
 
   <script>
-    // Register Service Worker for PWA
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js');
-    }
+    if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
     const imageInput = document.getElementById('imageInput');
     const stitchBtn = document.getElementById('stitchBtn');
@@ -170,7 +162,6 @@
     const errorMsg = document.getElementById('error-msg');
     const canvasContainer = document.getElementById('canvas-container');
 
-    // Setup Layout Selector
     let currentLayout = 'grid';
     document.querySelectorAll('.layout-option').forEach(opt => {
       opt.addEventListener('click', function() {
@@ -181,14 +172,13 @@
     });
 
     const VALID_COUNTS = [2, 3, 4, 5, 6, 7, 8, 10];
-    const TILE_SIZE = 1200; // Render at high res for good quality
 
     stitchBtn.addEventListener('click', async () => {
       const files = imageInput.files;
       errorMsg.innerText = '';
 
       if (!VALID_COUNTS.includes(files.length)) {
-        errorMsg.innerText = `Please select an allowed number of images (2, 3, 4, 5, 6, 7, 8, or 10). You selected ${files.length}.`;
+        errorMsg.innerText = `Select exactly 2, 3, 4, 5, 6, 7, 8, or 10 images.`;
         return;
       }
 
@@ -212,88 +202,100 @@
       canvas.toBlob(async (blob) => {
         if (!blob) return;
         const file = new File([blob], "stitched_image.png", { type: "image/png" });
-        
-        // Native iOS Share Sheet - allows saving directly to Camera Roll
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          try {
-            await navigator.share({
-              files: [file],
-              title: 'Stitched Picture'
-            });
-          } catch (error) {
-            console.log('Share canceled or failed', error);
-          }
+          try { await navigator.share({ files: [file], title: 'Stitched Picture' }); } catch (e) {}
         } else {
-          // Fallback
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
-          a.href = url;
-          a.download = 'stitched_image.png';
-          a.click();
-          URL.revokeObjectURL(url);
+          a.href = url; a.download = 'stitched_image.png'; a.click(); URL.revokeObjectURL(url);
         }
       }, 'image/png', 1.0);
     });
 
     function loadImages(files) {
-      const promises = Array.from(files).map(file => {
+      return Promise.all(Array.from(files).map(file => {
         return new Promise((resolve, reject) => {
           const img = new Image();
           img.onload = () => resolve(img);
           img.onerror = reject;
           img.src = URL.createObjectURL(file);
         });
-      });
-      return Promise.all(promises);
+      }));
     }
 
     function drawCanvas(images, layout) {
       const count = images.length;
-      let cols, rows;
 
       if (layout === 'row') {
-        cols = count;
-        rows = 1;
+        const TARGET_HEIGHT = 1500;
+        let totalWidth = 0;
+        const scaledImages = images.map(img => {
+          const ratio = TARGET_HEIGHT / img.height;
+          const newWidth = img.width * ratio;
+          totalWidth += newWidth;
+          return { img, width: newWidth, height: TARGET_HEIGHT };
+        });
+
+        canvas.width = totalWidth;
+        canvas.height = TARGET_HEIGHT;
+
+        let currentX = 0;
+        scaledImages.forEach(item => {
+          ctx.drawImage(item.img, currentX, 0, item.width, item.height);
+          currentX += item.width;
+        });
+
       } else if (layout === 'col') {
-        cols = 1;
-        rows = count;
+        const TARGET_WIDTH = 1500;
+        let totalHeight = 0;
+        const scaledImages = images.map(img => {
+          const ratio = TARGET_WIDTH / img.width;
+          const newHeight = img.height * ratio;
+          totalHeight += newHeight;
+          return { img, width: TARGET_WIDTH, height: newHeight };
+        });
+
+        canvas.width = TARGET_WIDTH;
+        canvas.height = totalHeight;
+
+        let currentY = 0;
+        scaledImages.forEach(item => {
+          ctx.drawImage(item.img, 0, currentY, item.width, item.height);
+          currentY += item.height;
+        });
+
       } else { 
-        // Grid logic based on strict allowed numbers
+        let cols, rows;
         if (count === 2) { cols = 2; rows = 1; }
         else if (count === 3 || count === 4) { cols = 2; rows = 2; }
         else if (count === 5 || count === 6) { cols = 3; rows = 2; }
         else if (count === 7 || count === 8) { cols = 4; rows = 2; }
         else if (count === 10) { cols = 5; rows = 2; }
+
+        const TILE_SIZE = 1200;
+        canvas.width = cols * TILE_SIZE;
+        canvas.height = rows * TILE_SIZE;
+
+        // White background for grid
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        images.forEach((img, index) => {
+          const col = index % cols;
+          const row = Math.floor(index / cols);
+          const x = col * TILE_SIZE;
+          const y = row * TILE_SIZE;
+          drawContain(ctx, img, x, y, TILE_SIZE, TILE_SIZE);
+        });
       }
-
-      canvas.width = cols * TILE_SIZE;
-      canvas.height = rows * TILE_SIZE;
-
-      // Fill background with black so empty space/borders look clean
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      images.forEach((img, index) => {
-        const col = index % cols;
-        const row = Math.floor(index / cols);
-        const x = col * TILE_SIZE;
-        const y = row * TILE_SIZE;
-        
-        // Use contain instead of cover so nothing is cropped
-        drawContain(ctx, img, x, y, TILE_SIZE, TILE_SIZE);
-      });
     }
 
-    // Draws image replicating CSS "object-fit: contain" so entire picture stays untouched
     function drawContain(ctx, img, x, y, w, h) {
       const scale = Math.min(w / img.width, h / img.height);
       const newW = img.width * scale;
       const newH = img.height * scale;
-      
-      // Center the image inside its designated grid cell
       const offsetX = x + (w - newW) / 2;
       const offsetY = y + (h - newH) / 2;
-      
       ctx.drawImage(img, offsetX, offsetY, newW, newH);
     }
   </script>
