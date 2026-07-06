@@ -1,4 +1,4 @@
-const CACHE_NAME = 'picstitch-v1';
+const CACHE_NAME = 'picstitch-v3';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
