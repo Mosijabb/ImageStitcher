@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>PicStitch</title>
+  
+  <!-- PWA Meta Tags for iOS -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PicStitch">
+  <link rel="apple-touch-icon" href="https://via.placeholder.com/192/000000/FFFFFF/?text=PS">
+  
+  <link rel="manifest" href="manifest.json">
+
+  <style>
+    :root {
+      --bg: #121212;
+      --text: #ffffff;
+      --primary: #007aff;
+      --surface: #1e1e1e;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 { margin-top: 10px; font-size: 24px; }
+    .card {
+      background: var(--surface);
+      padding: 20px;
+      border-radius: 16px;
+      width: 100%;
+      max-width: 400px;
+      box-sizing: border-box;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      margin-bottom: 20px;
+    }
+    label, select, button, input {
+      display: block;
+      width: 100%;
+      margin-bottom: 15px;
+      font-size: 16px;
+    }
+    input[type="file"] {
+      background: #333;
+      padding: 10px;
+      border-radius: 8px;
+    }
+    select {
+      background: #333;
+      color: white;
+      border: 1px solid #555;
+      padding: 12px;
+      border-radius: 8px;
+    }
+    button {
+      background-color: var(--primary);
+      color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 12px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:disabled {
+      background-color: #555;
+      color: #888;
+    }
+    #canvas-container {
+      width: 100%;
+      max-width: 400px;
+      margin-bottom: 20px;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #000;
+    }
+    #error-msg {
+      color: #ff453a;
+      font-size: 14px;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>PicStitch</h1>
+
+  <div class="card">
+    <label for="imageInput">Select 2, 3, 4, or 8 pictures:</label>
+    <input type="file" id="imageInput" multiple accept="image/*">
+
+    <div id="error-msg"></div>
+
+    <label for="layoutSelect">Layout Style:</label>
+    <select id="layoutSelect">
+      <option value="grid">Grid</option>
+      <option value="row">Side by Side (Row)</option>
+    </select>
+
+    <button id="stitchBtn">Stitch Images</button>
+  </div>
+
+  <div id="canvas-container" style="display: none;">
+    <canvas id="outputCanvas"></canvas>
+  </div>
+
+  <button id="saveBtn" style="display: none; max-width: 400px;">Save to Photos</button>
+
+  <script>
+    // Register Service Worker for PWA installation
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+
+    const imageInput = document.getElementById('imageInput');
+    const layoutSelect = document.getElementById('layoutSelect');
+    const stitchBtn = document.getElementById('stitchBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
+    const errorMsg = document.getElementById('error-msg');
+    const canvasContainer = document.getElementById('canvas-container');
+
+    const VALID_COUNTS = [2, 3, 4, 8];
+    const TILE_SIZE = 1000; // Render at high res for good quality
+
+    stitchBtn.addEventListener('click', async () => {
+      const files = imageInput.files;
+      errorMsg.innerText = '';
+
+      if (!VALID_COUNTS.includes(files.length)) {
+        errorMsg.innerText = `Please select exactly 2, 3, 4, or 8 images. You selected ${files.length}.`;
+        return;
+      }
+
+      stitchBtn.innerText = "Processing...";
+      stitchBtn.disabled = true;
+
+      try {
+        const images = await loadImages(files);
+        drawCanvas(images, layoutSelect.value);
+        canvasContainer.style.display = 'block';
+        saveBtn.style.display = 'block';
+      } catch (err) {
+        errorMsg.innerText = "Error loading images.";
+      }
+
+      stitchBtn.innerText = "Stitch Images";
+      stitchBtn.disabled = false;
+    });
+
+    saveBtn.addEventListener('click', () => {
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        const file = new File([blob], "stitched_image.png", { type: "image/png" });
+        
+        // Native iOS Share Sheet - allows saving directly to Camera Roll
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({
+              files: [file],
+              title: 'Stitched Picture'
+            });
+          } catch (error) {
+            console.log('Share canceled or failed', error);
+          }
+        } else {
+          // Fallback for browsers that don't support sharing files
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'stitched_image.png';
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      }, 'image/png', 1.0);
+    });
+
+    // Promise wrapper to load file data into Image objects
+    function loadImages(files) {
+      const promises = Array.from(files).map(file => {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = URL.createObjectURL(file);
+        });
+      });
+      return Promise.all(promises);
+    }
+
+    function drawCanvas(images, layout) {
+      const count = images.length;
+      let cols, rows;
+
+      if (layout === 'row') {
+        cols = count;
+        rows = 1;
+      } else { // Grid
+        if (count === 2) { cols = 2; rows = 1; }
+        else if (count === 3) { cols = 2; rows = 2; }
+        else if (count === 4) { cols = 2; rows = 2; }
+        else if (count === 8) { cols = 4; rows = 2; }
+      }
+
+      canvas.width = cols * TILE_SIZE;
+      canvas.height = rows * TILE_SIZE;
+
+      // Fill background with black in case of empty slots (like in a 3-image grid)
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      images.forEach((img, index) => {
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        const x = col * TILE_SIZE;
+        const y = row * TILE_SIZE;
+        
+        drawCover(ctx, img, x, y, TILE_SIZE, TILE_SIZE);
+      });
+    }
+
+    // Draws image replicating CSS "object-fit: cover" so pictures don't stretch
+    function drawCover(ctx, img, x, y, w, h) {
+      const imgRatio = img.width / img.height;
+      const tileRatio = w / h;
+      let sx, sy, sw, sh;
+
+      if (imgRatio > tileRatio) {
+        sh = img.height;
+        sw = img.height * tileRatio;
+        sx = (img.width - sw) / 2;
+        sy = 0;
+      } else {
+        sw = img.width;
+        sh = img.width / tileRatio;
+        sx = 0;
+        sy = (img.height - sh) / 2;
+      }
+      ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+    }
+  </script>
+</body>
+</html>
